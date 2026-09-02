@@ -129,6 +129,8 @@
   .btn.warn { background: #4a2f2f; color: var(--danger); }
   .btn.small { padding: 5px 10px; font-size: 0.78rem; }
   .btn.active-loop { background: var(--accent2); color: #3a2408; font-weight: 700; }
+  .tap-btn { min-width: 150px; font-weight: 700; }
+  .tap-btn.tapping { background: var(--accent2); color: #3a2408; }
   .sec-actions { display: flex; gap: 6px; }
   .drag-handle { cursor: grab; color: var(--muted); font-size: 1.1rem; user-select: none; padding: 0 4px; }
 
@@ -196,9 +198,11 @@
     </div>
     <div class="row">
       <button id="stopBtn" class="btn">⏹ 停止(先頭へ)</button>
+      <button id="tapBtn" class="btn tap-btn">👆 タップテンポ</button>
+      <span id="tapHint" class="hint" style="margin:0;">リズムに合わせて連続タップ → BPMを自動検出 (対象: 選択中セクション)</span>
       <span id="modeBadge" class="btn small" style="cursor:default;">全曲モード</span>
     </div>
-    <div class="hint">セクションの行をクリックすると、そのセクションの先頭から再生します。ループボタンで そのセクションのみの練習ループ になります。</div>
+    <div class="hint">再生は各セクションの「▶ 単独」「🔁 ループ」ボタン、または上部の ▶ から。ループボタンで そのセクションのみの練習ループ になります。</div>
   </div>
 
   <div class="panel">
@@ -600,16 +604,7 @@ function renderSections() {
     else if (loopSectionIndex > +b.dataset.i) loopSectionIndex--;
     renderSections();
   }));
-  // click row = play from that section — ONLY on plain row background,
-  // never when interacting with controls (prevents accidental playback
-  // while adjusting BPM etc.). Also require the row click to be a
-  // deliberate click on the row itself, not a stray click while editing.
-  box.querySelectorAll(".section").forEach((el, i) => el.addEventListener("click", e => {
-    if (e.target.closest("input,select,button,.drag-handle,.sec-meta")) return;
-    if (playing && schedPos.sec === i) return; // already playing this section
-    stopPlayback();
-    startPlayback(i);
-  }));
+  // (行クリックによる再生は誤動作の元のため廃止。再生は ▶/単独/ループ ボタンから)
 }
 
 function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
@@ -651,6 +646,59 @@ document.getElementById("fileInput").onchange = e => {
   if (!f) return;
   f.text().then(t => applyData(JSON.parse(t)));
 };
+
+/* ---------- tap tempo ---------- */
+let tapTimes = [];
+let tapResetTimer = null;
+// which section tap tempo applies to: the loop target if set, else the first
+function tapTargetIndex() {
+  return loopSectionIndex != null && loopSectionIndex < sections.length ? loopSectionIndex : 0;
+}
+document.getElementById("tapBtn").addEventListener("click", () => {
+  const now = performance.now();
+  // reset if the last tap was more than 2.5s ago
+  if (tapTimes.length && now - tapTimes[tapTimes.length - 1] > 2500) tapTimes = [];
+  tapTimes.push(now);
+  const btn = document.getElementById("tapBtn");
+
+  if (tapTimes.length < 2) {
+    btn.classList.add("tapping");
+    btn.textContent = "👆 つづけて…";
+  } else {
+    // average of the last up-to-8 intervals, ignoring outliers > 3s
+    const gaps = [];
+    for (let i = 1; i < tapTimes.length; i++) {
+      const g = tapTimes[i] - tapTimes[i - 1];
+      if (g <= 3000) gaps.push(g);
+    }
+    if (gaps.length) {
+      const avg = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+      const bpm = Math.round(60000 / avg);
+      if (bpm >= 20 && bpm <= 300) {
+        const i = tapTargetIndex();
+        sections[i].bpm = bpm;
+        btn.textContent = `👆 ${bpm} BPM ✓`;
+        const row = document.querySelectorAll(".section")[i];
+        if (row) {
+          const bpmInput = row.querySelector(".sec-bpm");
+          if (bpmInput) bpmInput.value = bpm;
+          const meta = row.querySelector(".sec-meta");
+          if (meta) meta.textContent = sectionMeta(sections[i], i);
+        }
+        if (playing) {
+          // apply new BPM live on next scheduled beat (scheduler reads sections each tick)
+          document.getElementById("curBpm").textContent = bpm;
+        }
+      }
+    }
+  }
+  clearTimeout(tapResetTimer);
+  tapResetTimer = setTimeout(() => {
+    tapTimes = [];
+    btn.classList.remove("tapping");
+    btn.textContent = "👆 タップテンポ";
+  }, 2500);
+});
 
 /* ---------- transport controls ---------- */
 document.getElementById("playBtn").onclick = () => {
