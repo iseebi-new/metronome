@@ -246,7 +246,8 @@ let schedPos = { sec: 0, bar: 0, beat: 0 };   // next beat to schedule
 let preCountBeats = 0;
 let nextBeatTime = 0;
 let uiTimer = null;
-let uiState = null; // last played beat for display
+let uiQueue = [];    // scheduled beats awaiting display (FIFO, time-ordered)
+let uiState = null;  // beat currently being displayed
 let sectionStartTimes = []; // computed per schedule pass
 
 /* ---------- audio ---------- */
@@ -337,7 +338,7 @@ function scheduleTick() {
       const s0 = sections[loopSectionIndex ?? 0];
       const bd0 = beatDurationSec(s0.bpm, s0.den) / rate;
       clickSound(nextBeatTime, false, preCountBeats === 1);
-      uiState = { preCount: preCountBeats, at: nextBeatTime, num: s0.num, den: s0.den, bpm: s0.bpm, name: "カウントイン…", barsTotal: s0.bars, sec: -1 };
+      uiQueue.push({ preCount: preCountBeats, at: nextBeatTime, num: s0.num, den: s0.den, bpm: s0.bpm, name: "カウントイン…", barsTotal: s0.bars, sec: -1 });
       preCountBeats--;
       nextBeatTime += bd0;
       continue;
@@ -358,7 +359,7 @@ function scheduleTick() {
       speakCount(label, (nextBeatTime - audioCtx.currentTime) * 1000 + performance.now() - 60);
     }
     // record for UI
-    uiState = { sec: schedPos.sec, bar: schedPos.bar, beat: schedPos.beat, at: nextBeatTime, num: s.num, den: s.den, bpm: s.bpm, name: s.name, barsTotal: s.bars };
+    uiQueue.push({ sec: schedPos.sec, bar: schedPos.bar, beat: schedPos.beat, at: nextBeatTime, num: s.num, den: s.den, bpm: s.bpm, name: s.name, barsTotal: s.bars });
 
     // advance
     schedPos.beat++;
@@ -388,6 +389,7 @@ function startPlayback(fromSection = null) {
   preCountBeats = (+document.getElementById("preCountSelect").value) * s0.num;
   nextBeatTime = audioCtx.currentTime + 0.1;
   uiState = null;
+  uiQueue = [];
   document.getElementById("playBtn").textContent = "⏸";
   document.getElementById("playBtn").classList.add("playing");
   updateModeBadge();
@@ -400,6 +402,7 @@ function stopPlayback(toTop = false) {
   preCountBeats = 0;
   clearInterval(schedTimer); clearInterval(uiTimer);
   ttsQueue = [];
+  uiQueue = []; uiState = null;
   document.getElementById("playBtn").textContent = "▶";
   document.getElementById("playBtn").classList.remove("playing");
   if (toTop) { schedPos = { sec: loopSectionIndex ?? 0, bar: 0, beat: 0 }; }
@@ -428,9 +431,23 @@ function renderLamps(state) {
 }
 
 function updateUI(force = false) {
-  if (!uiState) return;
-  // show only when the scheduled beat time has arrived
-  if (!force && audioCtx && audioCtx.currentTime < uiState.at) return;
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  // Consume ALL beats whose scheduled time has arrived. The scheduler may
+  // queue several beats ahead; displaying only the newest one caused the
+  // visuals to appear frozen/skipped when timers lagged.
+  if (!force) {
+    let advanced = false;
+    while (uiQueue.length && uiQueue[0].at <= now) {
+      uiState = uiQueue.shift();
+      advanced = true;
+    }
+    if (!advanced) return;
+    if (!uiState) return;
+  } else {
+    if (!uiQueue.length) return;
+    uiState = uiQueue.shift();
+  }
   const s = uiState;
   document.getElementById("curSection").textContent = s.name;
   document.getElementById("curBar").textContent = s.bar + 1;
@@ -547,7 +564,11 @@ function renderSections() {
       if (k === "num") v = +v;
       if (k === "den") v = +v;
       sections[i][k] = v;
-      renderSections();
+      // update meta text only — do NOT rebuild rows (rebuilding steals focus
+      // while typing and makes editing impossible mid-playback)
+      const row = el.closest(".section");
+      if (row) row.querySelector(".sec-meta").textContent = sectionMeta(sections[i], i);
+      el.value = v;
     });
     if (el.classList.contains("sec-name")) {
       el.addEventListener("input", e => { sections[+el.dataset.i].name = el.value; });
@@ -579,9 +600,13 @@ function renderSections() {
     else if (loopSectionIndex > +b.dataset.i) loopSectionIndex--;
     renderSections();
   }));
-  // click row = play from that section (but not from inside inputs)
+  // click row = play from that section — ONLY on plain row background,
+  // never when interacting with controls (prevents accidental playback
+  // while adjusting BPM etc.). Also require the row click to be a
+  // deliberate click on the row itself, not a stray click while editing.
   box.querySelectorAll(".section").forEach((el, i) => el.addEventListener("click", e => {
-    if (e.target.closest("input,select,button,.drag-handle")) return;
+    if (e.target.closest("input,select,button,.drag-handle,.sec-meta")) return;
+    if (playing && schedPos.sec === i) return; // already playing this section
     stopPlayback();
     startPlayback(i);
   }));
