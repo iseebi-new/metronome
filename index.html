@@ -52,6 +52,52 @@
   .now-info { font-size: 0.9rem; color: var(--muted); }
   .now-info b { color: var(--text); font-size: 1.05rem; }
 
+  /* ---- Big visual pulse ---- */
+  .pulse-stage {
+    display: flex; align-items: center; gap: 20px; margin-top: 14px;
+    min-height: 130px;
+  }
+  .pulse-circle {
+    width: 120px; height: 120px; border-radius: 50%; flex: 0 0 auto;
+    background: radial-gradient(circle, #2c3040 40%, #20242f 100%);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 3rem; font-weight: 800; color: #3d4358;
+    transition: transform .06s ease-out, background .06s, color .06s, box-shadow .06s;
+    user-select: none;
+  }
+  .pulse-circle.downbeat {
+    background: radial-gradient(circle, var(--accent2) 0%, #b0763a 80%);
+    color: #3a2408; box-shadow: 0 0 40px var(--accent2);
+  }
+  .pulse-circle.beat {
+    background: radial-gradient(circle, var(--accent) 0%, #2a8578 80%);
+    color: #0b2422; box-shadow: 0 0 30px var(--accent);
+  }
+  .pulse-side { flex: 1; min-width: 0; }
+  .pulse-section-name {
+    font-size: 1.5rem; font-weight: 800; margin-bottom: 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .bar-track {
+    display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap;
+  }
+  .bar-cell {
+    height: 26px; flex: 1 1 14px; min-width: 10px; max-width: 34px;
+    background: #2c3040; border-radius: 5px;
+    transition: background .08s, transform .08s;
+    font-size: 0.62rem; color: #7d8499; display: flex; align-items: flex-end;
+    justify-content: center; padding-bottom: 2px; overflow: hidden;
+  }
+  .bar-cell.current { background: var(--accent); transform: scaleY(1.25); }
+  .bar-cell.current.downbeat-bar { background: var(--accent2); }
+  .progress-wrap {
+    background: #232735; border-radius: 6px; height: 10px; margin-top: 10px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width .1s linear;
+  }
+
   /* controls */
   .controls { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 14px; }
   .ctrl label { display: block; font-size: 0.78rem; color: var(--muted); margin-bottom: 4px; }
@@ -111,6 +157,14 @@
         <div>セクション: <b id="curSection">–</b></div>
         <div>小節: <b id="curBar">–</b> / 拍: <b id="curBeat">–</b></div>
         <div>拍子: <b id="curTimeSig">–</b> ・ BPM: <b id="curBpm">–</b></div>
+      </div>
+    </div>
+    <div class="pulse-stage">
+      <div id="pulseCircle" class="pulse-circle">–</div>
+      <div class="pulse-side">
+        <div id="pulseSectionName" class="pulse-section-name">–</div>
+        <div id="barTrack" class="bar-track"></div>
+        <div class="progress-wrap"><div id="progressFill" class="progress-fill"></div></div>
       </div>
     </div>
     <div class="controls">
@@ -285,7 +339,7 @@ function scheduleTick() {
       speakCount(label, (nextBeatTime - audioCtx.currentTime) * 1000 + performance.now() - 60);
     }
     // record for UI
-    uiState = { sec: schedPos.sec, bar: schedPos.bar, beat: schedPos.beat, at: nextBeatTime, num: s.num, den: s.den, bpm: s.bpm, name: s.name };
+    uiState = { sec: schedPos.sec, bar: schedPos.bar, beat: schedPos.beat, at: nextBeatTime, num: s.num, den: s.den, bpm: s.bpm, name: s.name, barsTotal: s.bars };
 
     // advance
     schedPos.beat++;
@@ -362,11 +416,50 @@ function updateUI(force = false) {
   document.getElementById("curTimeSig").textContent = `${s.num}/${s.den}`;
   document.getElementById("curBpm").textContent = Math.round(s.bpm * rate);
   renderLamps(s);
+  updatePulse(s);
   // highlight current section row
   document.querySelectorAll(".section").forEach((el, i) => el.classList.toggle("current", i === s.sec));
   // scroll into view (gentle)
   const cur = document.querySelector(".section.current");
   if (cur) cur.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+/* ---------- big visual pulse ---------- */
+let pulseFadeTimer = null;
+function updatePulse(s) {
+  const circle = document.getElementById("pulseCircle");
+  const isDown = s.beat === 0;
+  circle.textContent = s.beat + 1;
+  circle.className = "pulse-circle " + (isDown ? "downbeat" : "beat");
+  // retrigger pop animation
+  circle.style.transform = "scale(1.18)";
+  clearTimeout(pulseFadeTimer);
+  pulseFadeTimer = setTimeout(() => { circle.style.transform = "scale(1)"; }, 70);
+
+  document.getElementById("pulseSectionName").textContent = s.name;
+
+  // bar track: one cell per bar of the current section
+  const track = document.getElementById("barTrack");
+  if (+track.dataset.bars !== s.barsTotal || track.dataset.sec !== String(s.sec)) {
+    track.innerHTML = "";
+    track.dataset.bars = s.barsTotal;
+    track.dataset.sec = s.sec;
+    for (let i = 0; i < s.barsTotal; i++) {
+      const c = document.createElement("div");
+      c.className = "bar-cell";
+      c.textContent = i + 1;
+      track.appendChild(c);
+    }
+  }
+  [...track.children].forEach((c, i) => {
+    c.classList.toggle("current", i === s.bar);
+    c.classList.toggle("downbeat-bar", i === 0);
+  });
+
+  // progress within section (0..1)
+  const beatsDone = s.bar * s.num + s.beat;
+  document.getElementById("progressFill").style.width =
+    (100 * beatsDone / (s.num * s.barsTotal)) + "%";
 }
 
 function updateModeBadge() {
