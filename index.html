@@ -227,6 +227,13 @@
       <button id="exportJson" class="btn">⬇ JSON書き出し</button>
       <button id="importJson" class="btn">⬆ JSON読み込み</button>
       <input type="file" id="fileInput" accept=".json" style="display:none">
+      <span id="statusFlash" style="display:none;font-weight:700;"></span>
+    </div>
+    <div id="loadPicker" style="display:none;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;">
+      <span>曲を選択:</span>
+      <select id="loadPickerSelect" style="background:#171a24;color:var(--text);border:1px solid #333849;border-radius:6px;padding:8px;"></select>
+      <button id="loadPickerOk" class="btn primary small">読み込む</button>
+      <button id="loadPickerCancel" class="btn small">キャンセル</button>
     </div>
   </div>
 </div>
@@ -621,18 +628,48 @@ function applyData(d) {
   renderSections(); updateModeBadge();
 }
 document.getElementById("saveLocal").onclick = () => {
-  const all = JSON.parse(localStorage.getItem("metronome_songs") || "{}");
-  all[document.getElementById("songTitle").value || "無題"] = songData();
-  localStorage.setItem("metronome_songs", JSON.stringify(all));
-  alert("保存しました");
+  try {
+    const all = JSON.parse(localStorage.getItem("metronome_songs") || "{}");
+    all[document.getElementById("songTitle").value || "無題"] = songData();
+    localStorage.setItem("metronome_songs", JSON.stringify(all));
+    flashStatus("💾 保存しました: " + (document.getElementById("songTitle").value || "無題"));
+  } catch (err) {
+    flashStatus("保存に失敗しました: " + err.message, true);
+  }
 };
 document.getElementById("loadLocal").onclick = () => {
-  const all = JSON.parse(localStorage.getItem("metronome_songs") || "{}");
-  const names = Object.keys(all);
-  if (!names.length) return alert("保存済みの曲がありません");
-  const name = prompt("読み込む曲名:\n" + names.join("\n"));
-  if (name && all[name]) applyData(all[name]);
+  let all = null;
+  try { all = JSON.parse(localStorage.getItem("metronome_songs") || "{}"); } catch (e) { all = null; }
+  const names = all ? Object.keys(all) : [];
+  if (!names.length) return flashStatus("保存済みの曲がありません", true);
+  // show a proper in-page picker (prompt() is unreliable/unavailable in
+  // some mobile browsers and embedded webviews)
+  const picker = document.getElementById("loadPicker");
+  const sel = document.getElementById("loadPickerSelect");
+  sel.innerHTML = names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
+  picker.style.display = "flex";
 };
+document.getElementById("loadPickerCancel").onclick = () => {
+  document.getElementById("loadPicker").style.display = "none";
+};
+document.getElementById("loadPickerOk").onclick = () => {
+  const name = document.getElementById("loadPickerSelect").value;
+  document.getElementById("loadPicker").style.display = "none";
+  try {
+    const all = JSON.parse(localStorage.getItem("metronome_songs") || "{}");
+    if (all[name]) { applyData(all[name]); flashStatus("📂 読み込みました: " + name); }
+  } catch (err) {
+    flashStatus("読み込みに失敗しました: " + err.message, true);
+  }
+};
+function flashStatus(msg, isErr = false) {
+  const el = document.getElementById("statusFlash");
+  el.textContent = msg;
+  el.style.color = isErr ? "var(--danger)" : "var(--accent)";
+  el.style.display = "inline";
+  clearTimeout(flashStatus._t);
+  flashStatus._t = setTimeout(() => { el.style.display = "none"; }, 3000);
+}
 document.getElementById("exportJson").onclick = () => {
   const blob = new Blob([JSON.stringify(songData(), null, 2)], { type: "application/json" });
   const a = document.createElement("a");
