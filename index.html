@@ -185,6 +185,14 @@
           <option value="silent">無音</option>
         </select>
       </div>
+      <div class="ctrl">
+        <label>プリカウント <span class="val" id="preCountVal">1小節</span></label>
+        <select id="preCountSelect" style="background:#171a24;color:var(--text);border:1px solid #333849;border-radius:6px;padding:6px;">
+          <option value="0">なし</option>
+          <option value="1" selected>1小節</option>
+          <option value="2">2小節</option>
+        </select>
+      </div>
     </div>
     <div class="row">
       <button id="stopBtn" class="btn">⏹ 停止(先頭へ)</button>
@@ -235,6 +243,7 @@ let rate = 1.0;
 let audioCtx = null, masterGain = null;
 let schedTimer = null;
 let schedPos = { sec: 0, bar: 0, beat: 0 };   // next beat to schedule
+let preCountBeats = 0;
 let nextBeatTime = 0;
 let uiTimer = null;
 let uiState = null; // last played beat for display
@@ -323,6 +332,16 @@ function resetPos() {
 function scheduleTick() {
   if (!playing) return;
   while (nextBeatTime < audioCtx.currentTime + SCHEDULE_AHEAD) {
+    // ---- pre-count phase ----
+    if (preCountBeats > 0) {
+      const s0 = sections[loopSectionIndex ?? 0];
+      const bd0 = beatDurationSec(s0.bpm, s0.den) / rate;
+      clickSound(nextBeatTime, false, preCountBeats === 1);
+      uiState = { preCount: preCountBeats, at: nextBeatTime, num: s0.num, den: s0.den, bpm: s0.bpm, name: "カウントイン…", barsTotal: s0.bars, sec: -1 };
+      preCountBeats--;
+      nextBeatTime += bd0;
+      continue;
+    }
     const s = sections[schedPos.sec];
     if (!s) { stopPlayback(); return; }
     const bd = beatDurationSec(s.bpm, s.den) / rate;
@@ -365,6 +384,8 @@ function startPlayback(fromSection = null) {
   playing = true;
   loopSectionIndex = fromSection;
   resetPos();
+  const s0 = sections[loopSectionIndex ?? 0];
+  preCountBeats = (+document.getElementById("preCountSelect").value) * s0.num;
   nextBeatTime = audioCtx.currentTime + 0.1;
   uiState = null;
   document.getElementById("playBtn").textContent = "⏸";
@@ -376,6 +397,7 @@ function startPlayback(fromSection = null) {
 }
 function stopPlayback(toTop = false) {
   playing = false;
+  preCountBeats = 0;
   clearInterval(schedTimer); clearInterval(uiTimer);
   ttsQueue = [];
   document.getElementById("playBtn").textContent = "▶";
@@ -428,6 +450,16 @@ function updateUI(force = false) {
 let pulseFadeTimer = null;
 function updatePulse(s) {
   const circle = document.getElementById("pulseCircle");
+  if (s.preCount != null) {
+    circle.textContent = s.preCount;
+    circle.className = "pulse-circle downbeat";
+    document.getElementById("pulseSectionName").textContent = "カウントイン… (" + s.preCount + ")";
+    document.getElementById("progressFill").style.width = "0%";
+    document.getElementById("curSection").textContent = "カウントイン";
+    document.getElementById("curBar").textContent = "–";
+    document.getElementById("curBeat").textContent = s.preCount;
+    return;
+  }
   const isDown = s.beat === 0;
   circle.textContent = s.beat + 1;
   circle.className = "pulse-circle " + (isDown ? "downbeat" : "beat");
@@ -612,6 +644,10 @@ document.getElementById("rateSlider").oninput = e => {
 document.getElementById("volSlider").oninput = e => {
   document.getElementById("volVal").textContent = e.target.value + "%";
   setVolume(+e.target.value);
+};
+document.getElementById("preCountSelect").onchange = e => {
+  document.getElementById("preCountVal").textContent =
+    { 0: "なし", 1: "1小節", 2: "2小節" }[e.target.value];
 };
 document.getElementById("countMode").onchange = e => {
   document.getElementById("countVal").textContent =
